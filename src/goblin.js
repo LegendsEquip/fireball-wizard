@@ -129,6 +129,8 @@ export class Goblin {
     this.attackT = 0;
     this.windup = 0;
     this.flash = 0;
+    this.burnT = 0;
+    this.burnDps = 0;
     this.walkT = Math.random() * 10;
     this.damage = chief ? 16 : 7;
     this.points = chief ? 1000 : 100;
@@ -146,11 +148,11 @@ export class Goblin {
   }
 
   // Returns damage actually taken
-  hurt(amount, from) {
+  hurt(amount, from, quiet = false) {
     if (!this.alive) return 0;
     const dmg = amount * (1 - this.fireResist);
     this.hp -= dmg;
-    this.flash = 1;
+    if (!quiet) this.flash = 1;
     this.alert();
     this.bar.visible = true;
     if (from) {
@@ -167,6 +169,12 @@ export class Goblin {
 
   alert() {
     this.state = 'chase';
+  }
+
+  // Lingering Burn: damage over time, handled by the game loop
+  ignite(dps) {
+    this.burnT = 3;
+    this.burnDps = Math.max(this.burnDps || 0, dps);
   }
 
   update(dt, wiz, others, camera, onHitPlayer) {

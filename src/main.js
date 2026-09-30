@@ -6,7 +6,9 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { buildWorld, isBlocked, hasLineOfSight, roomAt, spotInRoom, ROOMS } from './world.js';
 import { Wizard, ChaseCamera } from './wizard.js';
 import { Goblin } from './goblin.js';
-import { FireSystem, FIREBALL, GREAT_FIREBALL } from './fireball.js';
+import { FireSystem, FIREBALL, GREAT_FIREBALL, DRAKE_FIREBALL, withBoons } from './fireball.js';
+import { BOON_BY_ID, buildFrom, offer, xpForBoon } from './boons.js';
+import { Cage, Pet, PETS } from './pets.js';
 import { Particles } from './particles.js';
 import { LightPool } from './lights.js';
 import { Sfx } from './audio.js';
@@ -42,6 +44,9 @@ for (let i = 0; i < 5; i++) {
   glowLights.push({ light: l, src: null });
 }
 let glowT = 0;
+// The Fairies' lantern (also a faint glow for the Ember Drake)
+const petLight = new THREE.PointLight(0xd8ffe8, 0, 28, 1.6);
+scene.add(petLight);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
@@ -83,7 +88,20 @@ const game = {
   runTime: 0,
   room: null,
   visited: new Set(),
+  xp: 0,
+  boonLevel: 0,
+  pendingBoons: 0,
+  picked: {},
+  build: buildFrom({}),
+  fire: FIREBALL,
+  great: GREAT_FIREBALL,
+  offers: [],
+  cages: [],
+  pet: null,
 };
+
+// Where the caged pets wait
+const CAGES = [['fairies', 'mossy'], ['drake', 'camp'], ['cat', 'narrow'], ['turtle', 'echo']];
 let best = 0;
 try { best = Number(localStorage.getItem('fw-best-score')) || 0; } catch (e) { /* storage blocked */ }
 
@@ -102,9 +120,26 @@ function resetChest() {
   c.glow.material.opacity = 0;
 }
 
+function applyBuild() {
+  game.build = buildFrom(game.picked);
+  game.fire = withBoons(FIREBALL, game.build);
+  game.great = withBoons(GREAT_FIREBALL, game.build);
+  wizard.applyBuild(game.build, game.pet && game.pet.kind === 'cat' ? 1.2 : 1);
+}
+
 function resetRun() {
   for (const g of game.goblins) g.dispose();
   game.goblins = [];
+  for (const c of game.cages) c.dispose();
+  game.cages = CAGES.map(([kind, roomId], i) => new Cage(scene, kind, spotInRoom(ROOMS.find((r) => r.id === roomId), 500 + i * 13, 2.5)));
+  if (game.pet) game.pet.dispose();
+  game.pet = null;
+  petLight.intensity = 0;
+  caveMap.radius = 14;
+  game.xp = 0;
+  game.boonLevel = 0;
+  game.pendingBoons = 0;
+  game.picked = {};
   fx.clear();
   fire.clear();
   smoke.clear();
@@ -119,6 +154,7 @@ function resetRun() {
   caveMap.reset();
   resetChest();
   populate();
+  applyBuild();
 }
 
 // ---------- Input ----------
@@ -135,6 +171,7 @@ addEventListener('keydown', (e) => {
     if (game.state === 'playing') openMap();
     else if (game.state === 'map') closeMap();
   }
+  if (game.state === 'boon' && ['Digit1', 'Digit2', 'Digit3'].includes(e.code)) pickBoon(Number(e.code.slice(5)) - 1);
   if (e.code === 'Escape') {
     if (game.state === 'map') closeMap();
     else if (game.state === 'playing' && fallbackAim) pause();
@@ -155,22 +192,31 @@ addEventListener('mousemove', (e) => {
 });
 addEventListener('contextmenu', (e) => e.preventDefault());
 
+// If the mouse has been captured before, a failed re-capture (browsers
+// sometimes refuse right after a release) pauses so a click can retry.
+// If it never worked, aim with plain mouse movement instead.
+let hadLock = false;
+function lockFailed() {
+  if (hadLock) { if (game.state === 'playing') pause(); }
+  else fallbackAim = true;
+}
 function requestLock() {
   try {
     const r = canvas.requestPointerLock();
-    if (r && r.catch) r.catch(() => { fallbackAim = true; });
+    if (r && r.catch) r.catch(lockFailed);
   } catch (e) {
-    fallbackAim = true;
+    lockFailed();
   }
 }
 document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === canvas;
+  if (locked) hadLock = true;
   if (!locked && !fallbackAim && (game.state === 'playing' || game.state === 'map')) {
     if (game.state === 'map') closeMap();
     pause();
   }
 });
-document.addEventListener('pointerlockerror', () => { fallbackAim = true; });
+document.addEventListener('pointerlockerror', lockFailed);
 
 // ---------- Casting and aim ----------
 const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), tmpC = new THREE.Vector3();
@@ -185,6 +231,9 @@ function aimPoint(out) {
     p.copy(origin).addScaledVector(dir, s);
     for (const g of game.goblins) {
       if (g.alive && g.distanceTo(p) < g.hitRadius) return out.copy(p);
+    }
+    for (const c of game.cages) {
+      if (c.alive && c.distanceTo(p) < c.hitRadius) return out.copy(p);
     }
     if (isBlocked(p, 0.05)) return out.copy(p);
   }
@@ -225,26 +274,42 @@ function castAt(stats, target) {
   if (dir.lengthSq() < 0.01) dir.copy(camera.getWorldDirection(tmpA));
   dir.normalize();
   from.addScaledVector(dir, 0.2);
-  fx.cast(stats, from, dir);
+  // Twin Flame fans extra fireballs out to the sides
+  const n = stats.big ? 1 : game.build.count;
+  for (let i = 0; i < n; i++) {
+    const d = dir.clone().applyAxisAngle(UP, (i - (n - 1) / 2) * 0.1);
+    fx.cast(stats, from, d);
+  }
   wizard.castKick = 1;
   sfx.cast(stats.big);
 }
+const UP = new THREE.Vector3(0, 1, 0);
 
 function castFire(target = null) {
   if (wizard.cool > 0 || wizard.dead) return;
-  wizard.cool = FIREBALL.cooldown;
-  castAt(FIREBALL, target);
+  wizard.cool = game.fire.cooldown;
+  castAt(game.fire, target);
 }
 function castGreat() {
   if (wizard.bigCool > 0 || wizard.dead) return;
-  wizard.bigCool = GREAT_FIREBALL.cooldown;
-  castAt(GREAT_FIREBALL, null);
+  wizard.bigCool = game.great.cooldown;
+  castAt(game.great, null);
   chase.addShake(0.15);
 }
 
 // ---------- Damage ----------
 function hurtPlayer(amount, self) {
   if (wizard.dead || amount <= 0.2) return;
+  if (!self && Math.random() < game.build.dodge) {
+    popText('Dodged', wizard.center(new THREE.Vector3()).setY(wizard.pos.y + 2));
+    return;
+  }
+  if (game.pet) {
+    const before = amount;
+    amount = game.pet.absorb(amount);
+    if (amount < before) popText(`Shield −${Math.round(before - amount)}`, wizard.center(new THREE.Vector3()).setY(wizard.pos.y + 2.3), 'shield');
+    if (amount <= 0.2) return;
+  }
   wizard.hp = Math.max(0, wizard.hp - amount);
   wizard.hurtT = 0.5;
   hud.hurtFlash = Math.min(1, hud.hurtFlash + 0.4 + amount / 30);
@@ -254,16 +319,103 @@ function hurtPlayer(amount, self) {
   if (wizard.hp <= 0) die();
 }
 
-function hitEnemy(g, amount, from) {
+function hitEnemy(g, amount, from, quiet = false) {
+  if (g.isCage) { if (g.alive) freePet(g); return; }
   const wasAlive = g.alive;
-  const dmg = g.hurt(amount, from);
-  if (dmg > 0) popText(`${Math.round(dmg)}`, g.center(new THREE.Vector3()).setY(g.pos.y + 1.9 * g.scale));
+  const dmg = g.hurt(amount, from, quiet);
+  if (dmg > 0 && !quiet) popText(`${Math.round(dmg)}`, g.center(new THREE.Vector3()).setY(g.pos.y + 1.9 * g.scale));
   if (wasAlive && !g.alive) {
     game.kills += 1;
     game.score += g.points;
+    gainXp(g.chief ? 200 : 25, g.center(new THREE.Vector3()).setY(g.pos.y + 2.4 * g.scale));
     sfx.goblinDie();
-  } else if (dmg > 0) sfx.goblinHurt();
+  } else if (dmg > 0 && !quiet) sfx.goblinHurt();
 }
+
+// ---------- Boons ----------
+function gainXp(amount, where) {
+  game.xp += amount;
+  if (where) popText(`+${amount} XP`, where, 'xp');
+  while (game.xp >= xpForBoon(game.boonLevel)) {
+    game.xp -= xpForBoon(game.boonLevel);
+    game.boonLevel += 1;
+    game.pendingBoons += 1;
+  }
+}
+
+function openBoon() {
+  game.state = 'boon';
+  mouseDown = false;
+  if (document.pointerLockElement) document.exitPointerLock();
+  game.offers = offer();
+  sfx.boon();
+  $('boonKicker').textContent = `Boon ${game.boonLevel - game.pendingBoons + 1} earned`;
+  $('cards').innerHTML = '';
+  game.offers.forEach((b, i) => {
+    const n = (game.picked[b.id] || 0) + 1;
+    const trade = b.trade(n);
+    const el = document.createElement('button');
+    el.className = 'card-b';
+    el.innerHTML = `<span class="key">${i + 1}</span><span class="tag">${b.kind}${n > 1 ? ` · <b>Level ${n}</b>` : ''}</span><h3></h3><span class="eff"></span><span class="trade${trade ? '' : ' none'}"></span>`;
+    el.querySelector('h3').textContent = b.name;
+    el.querySelector('.eff').textContent = n > 1 ? `${b.effect(n)} (was ${b.effect(n - 1).toLowerCase()})` : b.effect(n);
+    el.querySelector('.trade').textContent = trade || 'No drawback';
+    el.addEventListener('click', () => pickBoon(i));
+    $('cards').appendChild(el);
+  });
+  const owned = Object.entries(game.picked).map(([id, n]) => `<span>${BOON_BY_ID[id].name}${n > 1 ? ` ×${n}` : ''}</span>`);
+  $('boonOwned').innerHTML = owned.length ? owned.join('') : '<span>No boons yet</span>';
+  $('boon').hidden = false;
+}
+
+function pickBoon(i) {
+  const b = game.offers[i];
+  if (!b || game.state !== 'boon') return;
+  game.picked[b.id] = (game.picked[b.id] || 0) + 1;
+  game.pendingBoons -= 1;
+  applyBuild();
+  $('boon').hidden = true;
+  banner(b.name);
+  if (game.pendingBoons > 0) { openBoon(); return; }
+  game.state = 'playing';
+  if (!fallbackAim) requestLock();
+}
+
+// ---------- Pets ----------
+function freePet(cage) {
+  const model = cage.open();
+  const from = cage.center(new THREE.Vector3());
+  if (game.pet) {
+    popText(`${game.pet.info.name} heads home`, game.pet.pos.clone().setY(game.pet.pos.y + 1));
+    game.pet.dispose();
+  }
+  game.pet = new Pet(scene, cage.kind, model, from);
+  sfx.cage();
+  banner(`${PETS[cage.kind].name} joins you`);
+  for (let i = 0; i < 30; i++) {
+    fire.emit({
+      x: from.x, y: from.y, z: from.z, vx: (Math.random() - 0.5) * 5, vy: Math.random() * 4, vz: (Math.random() - 0.5) * 5,
+      life: 0.7, size: 0.12, endSize: 0.02, color: [0.7, 1, 0.8], endColor: [0.3, 0.8, 0.5], gravity: 4,
+    });
+  }
+  const lit = cage.kind === 'fairies' ? 16 : cage.kind === 'drake' ? 4 : 0;
+  petLight.intensity = lit;
+  petLight.color.set(cage.kind === 'drake' ? 0xff8a3a : 0xd8ffe8);
+  caveMap.radius = cage.kind === 'fairies' ? 22 : 14;
+  applyBuild();
+}
+
+const petHooks = {
+  get goblins() { return game.goblins; },
+  castPet(from, target) {
+    const c = target.center(new THREE.Vector3());
+    c.addScaledVector(target.vel, (c.distanceTo(from) / DRAKE_FIREBALL.speed) * 0.8);
+    fx.cast(DRAKE_FIREBALL, from, c.sub(from).normalize());
+  },
+  bite(g, dmg) { hitEnemy(g, dmg / (1 - g.fireResist), null); },
+  shieldUp() { popText('Shield ready', wizard.center(new THREE.Vector3()).setY(wizard.pos.y + 2.3), 'shield'); },
+  light: petLight,
+};
 
 function saveBest() {
   if (game.score > best) {
@@ -322,6 +474,7 @@ function mapMarkers() {
   const c = world.chest;
   if (!c.opened) m.push({ x: c.pos.x, z: c.pos.z, color: '#e9b949', size: 5, shape: 'diamond' });
   m.push({ x: world.exit.pos.x, z: world.exit.pos.z, color: '#8fd8ff', size: 6 });
+  for (const cg of game.cages) if (cg.alive) m.push({ x: cg.pos.x, z: cg.pos.z, color: '#7ee0a0', size: 5 });
   for (const g of game.goblins) {
     if (g.alive && g.pos.distanceTo(wizard.pos) < 22) m.push({ x: g.pos.x, z: g.pos.z, color: g.state === 'chase' ? '#ff5a3c' : '#b8453a', size: g.chief ? 4.5 : 3 });
   }
@@ -335,7 +488,18 @@ function updateHud(dt) {
   $('hpNum').textContent = `${Math.ceil(wizard.hp)} / ${wizard.maxHp}`;
   $('score').textContent = game.score.toLocaleString('en-US');
   $('kills').textContent = `Kills ${game.kills}`;
-  const f = 1 - wizard.cool / FIREBALL.cooldown, g = 1 - wizard.bigCool / GREAT_FIREBALL.cooldown;
+  const f = 1 - wizard.cool / game.fire.cooldown, g = 1 - wizard.bigCool / game.great.cooldown;
+  const need = xpForBoon(game.boonLevel);
+  $('xpFill').style.width = `${Math.min(100, (game.xp / need) * 100)}%`;
+  $('xpNum').textContent = `${game.xp} / ${need} XP`;
+  const pet = game.pet;
+  $('petPanel').hidden = !pet;
+  if (pet) {
+    $('petName').textContent = pet.info.name;
+    $('petBlurb').textContent = pet.info.blurb;
+    $('shieldBar').hidden = pet.kind !== 'turtle';
+    if (pet.kind === 'turtle') $('shieldFill').style.width = `${(pet.shield / pet.shieldMax) * 100}%`;
+  }
   $('slotFire').style.setProperty('--p', f.toFixed(3));
   $('slotBig').style.setProperty('--p', g.toFixed(3));
   $('slotFire').classList.toggle('ready', wizard.cool <= 0);
@@ -477,7 +641,21 @@ $('clearedBtn').addEventListener('click', () => showTitle());
 // ---------- Main loop ----------
 const clock = new THREE.Clock();
 const titleCam = { t: 0 };
-const frozen = () => game.state === 'paused' || game.state === 'map' || game.state === 'cleared';
+const frozen = () => game.state === 'paused' || game.state === 'map' || game.state === 'cleared' || game.state === 'boon';
+
+function updateCagePrompt() {
+  let text = '';
+  for (const c of game.cages) {
+    if (!c.alive) continue;
+    const d = c.pos.distanceTo(wizard.pos);
+    if (d < 9 && hasLineOfSight(wizard.pos, c.pos)) {
+      text = `Blast the cage to free the ${PETS[c.kind].name}${game.pet ? ` (replaces your ${game.pet.info.name})` : ''}`;
+      break;
+    }
+  }
+  $('prompt').textContent = text;
+  $('prompt').classList.toggle('show', !!text);
+}
 
 function update(dt) {
   game.time += dt;
@@ -493,6 +671,8 @@ function update(dt) {
     }
     caveMap.update(dt, wizard.pos);
     updateRoom();
+    updateCagePrompt();
+    if (game.pendingBoons > 0) openBoon();
   } else if (game.state === 'dead' || game.state === 'title') {
     wizard.update(dt, {}, game.time);
   }
@@ -505,8 +685,21 @@ function update(dt) {
       const keep = g.update(dt, wizard, game.goblins, camera, (dmg) => { sfx.goblinJab(); hurtPlayer(dmg, false); });
       if (!keep) { g.dispose(); game.goblins.splice(i, 1); }
     }
+    for (const g of game.goblins) {
+      if (!g.alive || g.burnT <= 0) continue;
+      g.burnT -= dt;
+      hitEnemy(g, (g.burnDps * dt) / (1 - g.fireResist), null, true);
+      if (Math.random() < 0.5) {
+        fire.emit({
+          x: g.pos.x + (Math.random() - 0.5) * 0.5, y: g.pos.y + 0.3 + Math.random() * g.scale, z: g.pos.z + (Math.random() - 0.5) * 0.5,
+          vx: 0, vy: 1.2, vz: 0, life: 0.4, size: 0.3, endSize: 0.05, color: [1, 0.7, 0.3], endColor: [0.9, 0.2, 0.03],
+        });
+      }
+    }
+    for (const c of game.cages) c.update(game.time, wizard.pos);
+    if (game.pet && (game.state === 'playing' || game.state === 'dead')) game.pet.update(dt, game.time, wizard, petHooks);
     fx.update(dt, {
-      enemies: game.goblins,
+      enemies: game.goblins.concat(game.cages.filter((c) => c.alive)),
       wizard,
       cameraPos: camera.position,
       onEnemyHit: hitEnemy,
@@ -555,4 +748,4 @@ showTitle();
 frame();
 
 // Exposed for automated checks
-window.__fw = { game, wizard, castFire, castGreat, startRun, update, camera, fx, caveMap, openMap, closeMap };
+window.__fw = { game, wizard, castFire, castGreat, startRun, update, camera, fx, caveMap, openMap, closeMap, gainXp, pickBoon, freePet };

@@ -26,6 +26,11 @@
     <div class="bar"><div class="fill" id="hpFill"></div><div class="chip" id="hpChip"></div></div>
     <span class="num" id="hpNum">100 / 100</span>
   </div>
+  <div class="pet panel" id="petPanel" hidden>
+    <div class="petname" id="petName"></div>
+    <div class="petblurb" id="petBlurb"></div>
+    <div class="shield" id="shieldBar" hidden><div id="shieldFill"></div></div>
+  </div>
   <div class="score">
     <span class="lbl">Score</span>
     <span class="big" id="score">0</span>
@@ -38,6 +43,11 @@
   <canvas id="minimap" width="190" height="190"></canvas>
   <div class="maphint">M · Map</div>
   <div class="crosshair"><i></i><i></i><i></i><i></i></div>
+  <div class="xp">
+    <div class="xplbl"><span>Next boon</span><span id="xpNum">0 / 100 XP</span></div>
+    <div class="xpbar"><div id="xpFill"></div></div>
+  </div>
+  <div id="prompt"></div>
   <div class="slots">
     <div class="slot" id="slotFire"><div class="ring"></div><span class="key">Auto</span><span class="nm">Fire Ball</span></div>
     <div class="slot big" id="slotBig"><div class="ring"></div><span class="key">Space</span><span class="nm">Great Fireball</span></div>
@@ -50,14 +60,23 @@
 <div id="bigmap" hidden>
   <canvas id="fullmap"></canvas>
   <div class="maptitle">Mossfang Caves</div>
-  <div class="mapkeys"><span><i class="k-you"></i>You</span><span><i class="k-chest"></i>Treasure</span><span><i class="k-exit"></i>Way out</span><span>M or Esc to close</span></div>
+  <div class="mapkeys"><span><i class="k-you"></i>You</span><span><i class="k-chest"></i>Treasure</span><span><i class="k-exit"></i>Way out</span><span><i class="k-cage"></i>Caged pet</span><span>M or Esc to close</span></div>
+</div>
+
+<div id="boon" class="screen" hidden>
+  <div class="boon-inner">
+    <p class="boon-kicker" id="boonKicker">Boon earned</p>
+    <h2>Choose one</h2>
+    <div class="cards" id="cards"></div>
+    <div class="boon-foot" id="boonOwned"></div>
+  </div>
 </div>
 
 <div id="title" class="screen">
   <div class="card">
     <div class="eyebrow">Level 1 · The Mossfang Caves</div>
     <h1>Fireball <span>Wizard</span></h1>
-    <p>Find the way out of the caves. Goblins lurk in the rooms along the way. Careful: your own blasts can burn you.</p>
+    <p>Find the way out of the caves. Goblins lurk in the rooms along the way. Kills fill your boon meter, and caged pets wait to be blasted free. Careful: your own blasts can burn you.</p>
     <table class="keys">
       <tr><td>W A S D</td><td>Move</td></tr>
       <tr><td>Mouse</td><td>Aim</td></tr>

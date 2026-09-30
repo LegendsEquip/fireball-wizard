@@ -120,12 +120,29 @@ export class Wizard {
     this.yaw = 0;
     this.pitch = 0.05;
     this.radius = 0.45;
+    this.baseSpeed = 6.2;
     this.speed = 6.2;
     this.maxHp = 100;
     this.reset();
   }
 
+  // Apply boon multipliers (see boons.js) and any pet speed bonus
+  applyBuild(b, speedBonus = 1) {
+    const oldMax = this.maxHp;
+    this.maxHp = Math.round(100 * b.hp);
+    this.hp = Math.min(this.maxHp, this.hp + Math.max(0, this.maxHp - oldMax));
+    this.speed = this.baseSpeed * b.move * speedBonus;
+    this.sizeScale = b.scale;
+    this.model.root.scale.setScalar(b.scale);
+    this.radius = 0.45 * b.scale;
+  }
+
   reset() {
+    this.maxHp = 100;
+    this.speed = this.baseSpeed;
+    this.sizeScale = 1;
+    this.radius = 0.45;
+    this.model.root.scale.setScalar(1);
     this.pos.set(0, 0, -6);
     this.yaw = 0;
     this.pitch = -0.08;
@@ -158,7 +175,7 @@ export class Wizard {
   }
 
   center(out = new THREE.Vector3()) {
-    return out.copy(this.pos).setY(this.pos.y + 0.9);
+    return out.copy(this.pos).setY(this.pos.y + 0.9 * this.sizeScale);
   }
 
   look(dx, dy, sens) {

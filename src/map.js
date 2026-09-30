@@ -20,6 +20,7 @@ export class CaveMap {
     this.base.height = h * S;
     this.bctx = this.base.getContext('2d');
     this.revealT = 0;
+    this.radius = 14;
   }
 
   reset() {
@@ -47,7 +48,7 @@ export class CaveMap {
     this.revealT -= dt;
     if (this.revealT > 0) return;
     this.revealT = 0.2;
-    const R = 14;
+    const R = this.radius;
     const ci = Math.floor(X1 - pos.x), cj = Math.floor(Z1 - pos.z);
     const g = this.bctx;
     for (let j = cj - R; j <= cj + R; j++) {

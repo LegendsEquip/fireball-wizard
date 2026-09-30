@@ -137,5 +137,8 @@ export class Sfx {
   goblinDie() { this.blip('sawtooth', 380, 90, 0.4, 0.16); }
   goblinJab() { this.blip('triangle', 700, 350, 0.08, 0.08); }
   playerHurt() { this.blip('sine', 180, 60, 0.25, 0.5); }
+  bounce() { this.blip('triangle', 900, 1400, 0.08, 0.12); }
+  boon() { this.blip('triangle', 330, 880, 0.6, 0.25); setTimeout(() => this.blip('triangle', 440, 1320, 0.5, 0.2), 120); }
+  cage() { this.blip('square', 200, 900, 0.35, 0.18); }
   wave() { this.blip('triangle', 220, 440, 0.5, 0.2); }
 }

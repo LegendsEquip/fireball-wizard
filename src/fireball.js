@@ -1,9 +1,27 @@
 import * as THREE from 'three';
-import { isBlocked, floorY } from './world.js';
+import { isBlocked, floorY, ceilY, sdf } from './world.js';
 
-// Base stats. Boons will modify copies of these in step 2.
+// Base stats. `withBoons` scales a copy by the multipliers from boons.js.
 export const FIREBALL = { radius: 0.26, speed: 24, damage: 28, blast: 2.6, selfDamage: 6, cooldown: 0.6, big: false };
 export const GREAT_FIREBALL = { radius: 0.55, speed: 16, damage: 75, blast: 5.2, selfDamage: 22, cooldown: 8, big: true };
+export const DRAKE_FIREBALL = { radius: 0.15, speed: 20, damage: 12, blast: 1.3, selfDamage: 0, cooldown: 1.3, big: false, pet: true };
+
+export function withBoons(base, b) {
+  const sizeK = Math.sqrt(b.size);
+  return {
+    ...base,
+    radius: base.radius * sizeK,
+    speed: base.speed * b.speed,
+    damage: base.damage * b.dmg * (base.big ? 1 : b.dmgEach),
+    blast: base.blast * b.blast * sizeK,
+    selfDamage: base.selfDamage * b.self * (1 - b.ward),
+    cooldown: base.cooldown * b.cd,
+    bounces: base.big ? 0 : b.bounces,
+    pierce: base.big ? 0 : b.pierce,
+    burn: b.burn,
+    seek: base.big ? 0 : b.seek,
+  };
+}
 
 const coreGeo = new THREE.SphereGeometry(1, 16, 12);
 const coreMat = new THREE.MeshBasicMaterial({ color: 0xfff1c4 });
@@ -46,6 +64,9 @@ class Fireball {
     this.pos = from.clone();
     this.vel = dir.clone().multiplyScalar(stats.speed);
     this.age = 0;
+    this.bounces = stats.bounces || 0;
+    this.pierce = stats.pierce || 0;
+    this.pierced = new Set();
     this.group = new THREE.Group();
     const core = new THREE.Mesh(coreGeo, coreMat);
     core.scale.setScalar(stats.radius * 0.55);
@@ -54,7 +75,7 @@ class Fireball {
     this.group.add(core, this.glow);
     this.group.position.copy(this.pos);
     sys.scene.add(this.group);
-    this.light = sys.lights.acquire(this);
+    this.light = stats.pet ? null : sys.lights.acquire(this);
     if (this.light) {
       this.light.light.color.set(0xff8a3a);
       this.light.light.distance = stats.big ? 22 : 15;
@@ -77,6 +98,7 @@ export class FireSystem {
 
   cast(stats, from, dir) {
     this.balls.push(new Fireball(this, stats, from, dir));
+    if (stats.pet) return;
     // Muzzle puff
     for (let i = 0; i < (stats.big ? 26 : 10); i++) {
       this.fire.emit({
@@ -93,15 +115,36 @@ export class FireSystem {
     for (let i = this.balls.length - 1; i >= 0; i--) {
       const b = this.balls[i];
       b.age += dt;
+      if (b.stats.seek) this.steer(b, dt, ctx.enemies);
       const steps = Math.max(1, Math.ceil((b.vel.length() * dt) / 0.2));
       let hit = null;
       for (let s = 0; s < steps && !hit; s++) {
         b.pos.addScaledVector(b.vel, dt / steps);
         for (const e of ctx.enemies) {
-          if (!e.alive) continue;
-          if (e.distanceTo(b.pos) < e.hitRadius + b.stats.radius) { hit = { enemy: e }; break; }
+          if (!e.alive || b.pierced.has(e) || (e.isCage && b.stats.pet)) continue;
+          if (e.distanceTo(b.pos) < e.hitRadius + b.stats.radius) {
+            if (b.pierce > 0) {
+              // Punch through: full hit on this one, keep flying
+              b.pierce -= 1;
+              b.pierced.add(e);
+              ctx.onEnemyHit(e, b.stats.damage, b.pos);
+              if (b.stats.burn) e.ignite(b.stats.burn);
+              this.sparks(b.pos, 14);
+              continue;
+            }
+            hit = { enemy: e };
+            break;
+          }
         }
-        if (!hit && isBlocked(b.pos, b.stats.radius * 0.6)) hit = {};
+        if (!hit && isBlocked(b.pos, b.stats.radius * 0.6)) {
+          if (b.bounces > 0) {
+            b.pos.addScaledVector(b.vel, -dt / steps);
+            this.reflect(b);
+            b.bounces -= 1;
+            this.sparks(b.pos, 18);
+            this.sfx.bounce();
+          } else hit = {};
+        }
       }
       if (!hit && b.age > 3.5) hit = {};
       b.group.position.copy(b.pos);
@@ -158,16 +201,68 @@ export class FireSystem {
     }
   }
 
+  // Bounce off whatever was hit: floor and ceiling flip vertical speed, walls
+  // reflect about the wall's normal (the uphill direction of the distance field).
+  reflect(b) {
+    const p = b.pos, r = b.stats.radius * 0.6;
+    if (p.y - r < floorY(p.x, p.z) + 0.15 || p.y + r > ceilY(p.x, p.z) - 0.4) {
+      b.vel.y = -b.vel.y;
+      if (sdf(p.x, p.z) < -r - 0.3) return;
+    }
+    const e = 0.3;
+    const n = new THREE.Vector3(-(sdf(p.x + e, p.z) - sdf(p.x - e, p.z)), 0, -(sdf(p.x, p.z + e) - sdf(p.x, p.z - e)));
+    if (n.lengthSq() < 1e-6) { b.vel.negate(); return; }
+    n.normalize();
+    const vn = b.vel.dot(n);
+    if (vn < 0) b.vel.addScaledVector(n, -2 * vn);
+  }
+
+  // Seeker: turn toward the nearest goblin ahead
+  steer(b, dt, enemies) {
+    const speed = b.vel.length();
+    const dir = TMP2.copy(b.vel).divideScalar(speed);
+    let best = null, bestD = 14;
+    for (const e of enemies) {
+      if (!e.alive || e.isCage || b.pierced.has(e)) continue;
+      const to = e.center(TMP3).sub(b.pos);
+      const d = to.length();
+      if (d < bestD && to.dot(dir) / d > 0.3) { bestD = d; best = e; }
+    }
+    if (!best) return;
+    const want = best.center(TMP3).sub(b.pos).normalize();
+    dir.lerp(want, Math.min(1, b.stats.seek * 3 * dt)).normalize();
+    b.vel.copy(dir).multiplyScalar(speed);
+  }
+
+  sparks(pos, n) {
+    for (let i = 0; i < n; i++) {
+      const v = randDir().multiplyScalar(3 + Math.random() * 4);
+      this.fire.emit({
+        x: pos.x, y: pos.y, z: pos.z, vx: v.x, vy: v.y + 1, vz: v.z,
+        life: 0.3 + Math.random() * 0.3, size: 0.09, endSize: 0.02,
+        color: [1, 0.9, 0.6], endColor: [1, 0.4, 0.1], drag: 1.5, gravity: 8,
+      });
+    }
+  }
+
   explode(pos, stats, direct, ctx) {
     const R = stats.blast;
     // Damage: full at the centre, 40% at the edge. The wizard is not immune.
     for (const e of ctx.enemies) {
-      if (!e.alive) continue;
+      if (!e.alive || (e.isCage && stats.pet)) continue;
       const d = e.distanceTo(pos);
       if (e === direct || d < R) {
         const k = e === direct ? 1 : 1 - 0.6 * (d / R);
         ctx.onEnemyHit(e, stats.damage * k, pos);
+        if (stats.burn && e.alive) e.ignite(stats.burn);
       }
+    }
+    if (stats.pet) {
+      // Small pet blasts: a puff of sparks, no light or shake
+      this.addFlash(pos, flashMat2, R * 0.5, R * 2, 0.3, 0.8);
+      this.sparks(pos, 16);
+      this.sfx.explode(false, 0.25);
+      return;
     }
     const wd = ctx.wizard.center(TMP).distanceTo(pos);
     if (wd < R && !ctx.wizard.dead) ctx.onSelfHit(stats.selfDamage * (1 - wd / R));
@@ -242,7 +337,7 @@ export class FireSystem {
   }
 }
 
-const TMP = new THREE.Vector3();
+const TMP = new THREE.Vector3(), TMP2 = new THREE.Vector3(), TMP3 = new THREE.Vector3();
 function randDir() {
   const u = Math.random() * 2 - 1, a = Math.random() * Math.PI * 2, s = Math.sqrt(1 - u * u);
   return new THREE.Vector3(s * Math.cos(a), u, s * Math.sin(a));
