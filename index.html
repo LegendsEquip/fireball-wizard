@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fireball Wizard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IM+Fell+English+SC&family=Barlow+Semi+Condensed:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud" hidden>
+  <div class="hp panel">
+    <span class="lbl">HP</span>
+    <div class="bar"><div class="fill" id="hpFill"></div><div class="chip" id="hpChip"></div></div>
+    <span class="num" id="hpNum">100 / 100</span>
+  </div>
+  <div class="score">
+    <span class="lbl">Score</span>
+    <span class="big" id="score">0</span>
+    <span class="lbl" id="kills">Kills 0</span>
+  </div>
+  <div class="area">
+    <div class="name">Mossfang Caves</div>
+    <div class="sub" id="waveLbl">Wave 1</div>
+  </div>
+  <div class="crosshair"><i></i><i></i><i></i><i></i></div>
+  <div class="slots">
+    <div class="slot" id="slotFire"><div class="ring"></div><span class="key">Click</span><span class="nm">Fire Ball</span></div>
+    <div class="slot big" id="slotBig"><div class="ring"></div><span class="key">Space</span><span class="nm">Great Fireball</span></div>
+  </div>
+  <div id="banner"></div>
+  <div id="hurt"></div>
+  <div id="pops"></div>
+</div>
+
+<div id="title" class="screen">
+  <div class="card">
+    <div class="eyebrow">Step 1 · Test cave</div>
+    <h1>Fireball <span>Wizard</span></h1>
+    <p>Goblins are pouring out of the tunnels. Hold them off with the only spell you know. Careful: your own blasts can burn you.</p>
+    <table class="keys">
+      <tr><td>W A S D</td><td>Move</td></tr>
+      <tr><td>Mouse</td><td>Aim</td></tr>
+      <tr><td>Click</td><td>Fire Ball</td></tr>
+      <tr><td>Space</td><td>Great Fireball</td></tr>
+      <tr><td>Esc</td><td>Pause</td></tr>
+    </table>
+    <button id="play">Click to play</button>
+    <p class="best" id="best"></p>
+  </div>
+</div>
+
+<div id="paused" class="screen" hidden>
+  <div class="card small">
+    <h2>Paused</h2>
+    <button id="resume">Click to resume</button>
+    <button id="quit" class="ghost">Back to title</button>
+  </div>
+</div>
+
+<div id="dead" class="screen" hidden>
+  <div class="card small">
+    <h2>You have fallen</h2>
+    <p id="deadStats"></p>
+  </div>
+</div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
