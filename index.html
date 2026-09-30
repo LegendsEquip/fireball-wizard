@@ -32,12 +32,14 @@
     <span class="lbl" id="kills">Kills 0</span>
   </div>
   <div class="area">
-    <div class="name">Mossfang Caves</div>
-    <div class="sub" id="waveLbl">Wave 1</div>
+    <div class="name" id="roomName">Cave Mouth</div>
+    <div class="sub">Mossfang Caves · Level 1</div>
   </div>
+  <canvas id="minimap" width="190" height="190"></canvas>
+  <div class="maphint">M · Map</div>
   <div class="crosshair"><i></i><i></i><i></i><i></i></div>
   <div class="slots">
-    <div class="slot" id="slotFire"><div class="ring"></div><span class="key">Click</span><span class="nm">Fire Ball</span></div>
+    <div class="slot" id="slotFire"><div class="ring"></div><span class="key">Auto</span><span class="nm">Fire Ball</span></div>
     <div class="slot big" id="slotBig"><div class="ring"></div><span class="key">Space</span><span class="nm">Great Fireball</span></div>
   </div>
   <div id="banner"></div>
@@ -45,16 +47,24 @@
   <div id="pops"></div>
 </div>
 
+<div id="bigmap" hidden>
+  <canvas id="fullmap"></canvas>
+  <div class="maptitle">Mossfang Caves</div>
+  <div class="mapkeys"><span><i class="k-you"></i>You</span><span><i class="k-chest"></i>Treasure</span><span><i class="k-exit"></i>Way out</span><span>M or Esc to close</span></div>
+</div>
+
 <div id="title" class="screen">
   <div class="card">
-    <div class="eyebrow">Step 1 · Test cave</div>
+    <div class="eyebrow">Level 1 · The Mossfang Caves</div>
     <h1>Fireball <span>Wizard</span></h1>
-    <p>Goblins are pouring out of the tunnels. Hold them off with the only spell you know. Careful: your own blasts can burn you.</p>
+    <p>Find the way out of the caves. Goblins lurk in the rooms along the way. Careful: your own blasts can burn you.</p>
     <table class="keys">
       <tr><td>W A S D</td><td>Move</td></tr>
       <tr><td>Mouse</td><td>Aim</td></tr>
-      <tr><td>Click</td><td>Fire Ball</td></tr>
+      <tr><td>Automatic</td><td>Fire Ball casts at enemies you face</td></tr>
+      <tr><td>Click</td><td>Cast Fire Ball by hand</td></tr>
       <tr><td>Space</td><td>Great Fireball</td></tr>
+      <tr><td>M</td><td>Map</td></tr>
       <tr><td>Esc</td><td>Pause</td></tr>
     </table>
     <button id="play">Click to play</button>
@@ -67,6 +77,15 @@
     <h2>Paused</h2>
     <button id="resume">Click to resume</button>
     <button id="quit" class="ghost">Back to title</button>
+  </div>
+</div>
+
+<div id="cleared" class="screen" hidden>
+  <div class="card small">
+    <div class="eyebrow">Level 1 cleared</div>
+    <h2>You found the way out</h2>
+    <p id="clearedStats"></p>
+    <button id="clearedBtn">Back to title</button>
   </div>
 </div>
 

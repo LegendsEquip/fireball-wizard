@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { floorY, resolveWalker } from './world.js';
+import { floorY, resolveWalker, hasLineOfSight } from './world.js';
 
 const geos = {
   body: new THREE.SphereGeometry(0.34, 12, 10),
@@ -22,9 +22,11 @@ const barBack = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true
 const barFill = new THREE.MeshBasicMaterial({ color: 0xe0503f, depthWrite: false });
 
 export class Goblin {
-  constructor(scene, pos) {
+  constructor(scene, pos, { chief = false } = {}) {
     this.scene = scene;
-    this.skin = new THREE.MeshStandardMaterial({ color: 0x6f8f45, roughness: 0.8, flatShading: true, emissive: 0x000000 });
+    this.chief = chief;
+    this.baseColor = new THREE.Color(chief ? 0x5d7a3a : 0x6f8f45);
+    this.skin = new THREE.MeshStandardMaterial({ color: this.baseColor, roughness: 0.8, flatShading: true, emissive: 0x000000 });
     const root = new THREE.Group();
     const body = new THREE.Group();
     root.add(body);
@@ -92,34 +94,53 @@ export class Goblin {
 
     this.root = root;
     this.body = body;
+    this.scale = chief ? 1.55 : 1;
+    root.scale.setScalar(this.scale);
+    if (chief) {
+      // An iron helmet with a crest so the chief stands out
+      const helm = new THREE.Mesh(new THREE.SphereGeometry(0.27, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), ironMat);
+      helm.position.set(0, 0.04, 0);
+      head.add(helm);
+      const crest = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.18, 0.4), new THREE.MeshStandardMaterial({ color: 0xb02a1a, roughness: 0.7, flatShading: true }));
+      crest.position.set(0, 0.28, 0);
+      head.add(crest);
+    }
     scene.add(root);
 
     this.pos = pos.clone();
+    root.position.copy(pos);
+    root.rotation.y = Math.random() * Math.PI * 2;
+    this.home = pos.clone();
+    this.state = 'idle'; // idle | chase
+    this.wanderT = Math.random() * 3;
+    this.wanderTo = pos.clone();
+    this.senseT = Math.random() * 0.3;
     this.vel = new THREE.Vector3();
     this.knock = new THREE.Vector3();
     this.yaw = 0;
-    this.radius = 0.42;
-    this.hitRadius = 0.45;
-    this.maxHp = 40;
+    this.radius = 0.42 * this.scale;
+    this.hitRadius = 0.45 * this.scale;
+    this.maxHp = chief ? 220 : 40;
     this.hp = this.maxHp;
     this.fireResist = 0.25;
-    this.speed = 3.1 + Math.random() * 0.8;
+    this.speed = (chief ? 2.7 : 3.1) + Math.random() * 0.8;
     this.alive = true;
     this.deadT = 0;
     this.attackT = 0;
     this.windup = 0;
     this.flash = 0;
     this.walkT = Math.random() * 10;
-    this.damage = 7;
+    this.damage = chief ? 16 : 7;
+    this.points = chief ? 1000 : 100;
   }
 
   center(out = new THREE.Vector3()) {
-    return out.copy(this.pos).setY(this.pos.y + 0.85);
+    return out.copy(this.pos).setY(this.pos.y + 0.85 * this.scale);
   }
 
   // Upright capsule from the feet to the top of the head
   distanceTo(p) {
-    const y = Math.min(this.pos.y + 1.25, Math.max(this.pos.y + 0.35, p.y));
+    const y = Math.min(this.pos.y + 1.25 * this.scale, Math.max(this.pos.y + 0.35 * this.scale, p.y));
     const dx = p.x - this.pos.x, dy = p.y - y, dz = p.z - this.pos.z;
     return Math.sqrt(dx * dx + dy * dy + dz * dz);
   }
@@ -130,6 +151,7 @@ export class Goblin {
     const dmg = amount * (1 - this.fireResist);
     this.hp -= dmg;
     this.flash = 1;
+    this.alert();
     this.bar.visible = true;
     if (from) {
       const push = this.pos.clone().sub(from).setY(0);
@@ -143,6 +165,10 @@ export class Goblin {
     return dmg;
   }
 
+  alert() {
+    this.state = 'chase';
+  }
+
   update(dt, wiz, others, camera, onHitPlayer) {
     if (this.flash > 0) {
       this.flash = Math.max(0, this.flash - dt * 5);
@@ -154,14 +180,38 @@ export class Goblin {
       this.body.rotation.x = -t * 1.45;
       this.body.rotation.z = this.fallDir * t * 0.3;
       if (this.deadT > 1.5) this.root.position.y = this.pos.y - (this.deadT - 1.5) * 0.6;
-      this.skin.color.setRGB(0.43 - t * 0.25, 0.56 - t * 0.38, 0.27 - t * 0.17);
+      this.skin.color.copy(this.baseColor).multiplyScalar(1 - t * 0.6);
       return this.deadT < 2.8;
     }
 
     const toP = wiz.pos.clone().sub(this.pos).setY(0);
     const dist = toP.length();
     const want = new THREE.Vector3();
-    if (dist > 1.25 && !wiz.dead) want.copy(toP).multiplyScalar(1 / dist);
+
+    // Notice the wizard when close with a clear view; give up when far away
+    this.senseT -= dt;
+    if (this.senseT <= 0) {
+      this.senseT = 0.25;
+      if (this.state === 'idle' && !wiz.dead && dist < 15 && hasLineOfSight(this.pos, wiz.pos)) {
+        this.state = 'chase';
+        for (const o of others) if (o.alive && o.pos.distanceTo(this.pos) < 9) o.alert();
+      } else if (this.state === 'chase' && (dist > 45 || wiz.dead)) {
+        this.state = 'idle';
+      }
+    }
+
+    if (this.state === 'chase') {
+      if (dist > 1.25 * this.scale && !wiz.dead) want.copy(toP).multiplyScalar(1 / dist);
+    } else {
+      // Mill about near home
+      this.wanderT -= dt;
+      if (this.wanderT <= 0) {
+        this.wanderT = 2 + Math.random() * 4;
+        this.wanderTo.copy(this.home).add(new THREE.Vector3((Math.random() - 0.5) * 5, 0, (Math.random() - 0.5) * 5));
+      }
+      const w = this.wanderTo.clone().sub(this.pos).setY(0);
+      if (w.length() > 0.5) want.copy(w.normalize()).multiplyScalar(0.35);
+    }
     // Keep a little space from other goblins
     for (const o of others) {
       if (o === this || !o.alive) continue;
@@ -180,8 +230,9 @@ export class Goblin {
     resolveWalker(this.pos, this.radius);
     this.pos.y = floorY(this.pos.x, this.pos.z);
 
-    if (dist > 0.01) {
-      const target = Math.atan2(toP.x, toP.z);
+    const face = this.state === 'chase' ? toP : this.vel;
+    if (face.lengthSq() > 0.0001) {
+      const target = Math.atan2(face.x, face.z);
       let d = target - this.yaw;
       while (d > Math.PI) d -= Math.PI * 2;
       while (d < -Math.PI) d += Math.PI * 2;
@@ -193,10 +244,10 @@ export class Goblin {
     if (this.windup > 0) {
       this.windup -= dt;
       if (this.windup <= 0) {
-        if (dist < 1.7 && !wiz.dead) onHitPlayer(this.damage, this);
+        if (dist < 1.7 * this.scale && !wiz.dead) onHitPlayer(this.damage, this);
         this.attackT = 1.1;
       }
-    } else if (dist < 1.5 && this.attackT <= 0 && !wiz.dead) {
+    } else if (this.state === 'chase' && dist < 1.5 * this.scale && this.attackT <= 0 && !wiz.dead) {
       this.windup = 0.5;
     }
 

@@ -221,7 +221,7 @@ export class ChaseCamera {
     const p = this._p;
     for (let s = 0.3; s <= this.dist; s += 0.15) {
       p.copy(pivot).addScaledVector(dir, -s);
-      if (isBlocked(p, 0.25)) { d = Math.max(1.5, s - 0.3); break; }
+      if (isBlocked(p, 0.25)) { d = Math.max(1.0, s - 0.3); break; }
     }
     this.camera.position.copy(pivot).addScaledVector(dir, -d);
     if (this.shake > 0) {
